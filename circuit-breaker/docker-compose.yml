@@ -1,0 +1,70 @@
+services:
+  circuit-breaker:
+    build: .
+    depends_on:
+      - localstack
+      - postgres
+      - create-queue
+    environment:
+      - SPRING_PROFILES_ACTIVE=local
+      - AWS_ACCESS_KEY_ID=dummy
+      - AWS_SECRET_ACCESS_KEY=dummy
+      - AWS_REGION=sa-east-1
+      - LOCALSTACK_ENDPOINT=http://localstack:4566
+      - SQS_QUEUE_URL=http://localstack:4566/000000000000/orders-queue
+      - DB_URL=postgresql://user:password@postgres:5432/mydb?sslmode=disable
+    ports:
+      - "8080:8080"
+  
+  localstack:
+    image: localstack/localstack:dev-arm64
+    ports:
+      - "4566:4566"
+      - "4510-4559:4510-4559"
+    environment:
+      - SERVICES=sqs
+      - DEBUG=1
+      - AWS_ACCESS_KEY_ID=dummy
+      - AWS_SECRET_ACCESS_KEY=dummy
+      - AWS_REGION=sa-east-1
+      - DATA_DIR=/tmp/localstack/data
+      - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN}
+    volumes:
+      - "./localstack_data:/var/lib/localstack" 
+      - "/var/run/docker.sock:/var/run/docker.sock"
+  
+  postgres:
+    image: postgres:18.4
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: mydb
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql   # <- monta o script de criação aqui
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d mydb -h localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+  
+  create-queue:
+    image: localstack/localstack:dev-arm64
+    depends_on:
+      - localstack
+    environment:
+      - SERVICES=sqs
+      - DEBUG=1
+      - DATA_DIR=/tmp/localstack/data
+      - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN}
+      - AWS_ACCESS_KEY_ID=dummy
+      - AWS_SECRET_ACCESS_KEY=dummy
+      - AWS_REGION=sa-east-1
+    entrypoint: ["sh", "-c"]
+    command: [ "
+      aws --endpoint-url=http://localstack:4566 sqs create-queue \
+        --queue-name orders-queue \
+        --region sa-east-1
+      " ]
