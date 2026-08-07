@@ -24,12 +24,8 @@ sqs-receive:
 	AWS_ACCESS_KEY_ID=dummy AWS_SECRET_ACCESS_KEY=dummy AWS_REGION=sa-east-1 aws sqs receive-message --endpoint-url=http://localhost:4566 --queue-url http://localhost:4566/000000000000/orders-queue --region sa-east-1
 
 sqs-send:
-	@count=$${COUNT:-1}; \
-	while [ $$count -gt 0 ]; do \
-		AWS_ACCESS_KEY_ID=dummy AWS_SECRET_ACCESS_KEY=dummy AWS_REGION=sa-east-1 aws sqs send-message \
-			--endpoint-url=http://localhost:4566 \
-			--queue-url http://localhost:4566/000000000000/orders-queue \
-			--message-body '{"name": "John Due", "amount": 100.00}' \
-			--region sa-east-1; \
-		count=$$((count-1)); \
-	done
+	AWS_PAGER="" AWS_ACCESS_KEY_ID=dummy AWS_SECRET_ACCESS_KEY=dummy AWS_REGION=sa-east-1 aws --no-cli-pager sqs send-message \
+		--endpoint-url=http://localhost:4566 \
+		--queue-url=http://localhost:4566/000000000000/orders-queue \
+		--message-body '{"name": "John Due", "amount": 100.00}' \
+		--region sa-east-1

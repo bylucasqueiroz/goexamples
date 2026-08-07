@@ -18,13 +18,14 @@ import (
 )
 
 const (
-	baseDelay  = 1 * time.Second
 	maxRetries = 5
+	baseDelay  = 1 * time.Second
+	maxDelay   = 30 * time.Second
 )
 
 func main() {
 	ctx := context.Background()
-	conn, err := dbConnect()
+	conn, err := initDbConnection()
 	if err != nil {
 		log.Fatalf("Unable to connect to database: %v\n", err)
 	}
@@ -43,20 +44,28 @@ func main() {
 	queue := NewQueue(client)
 	repo := NewRepository(conn)
 	breaker := NewDatabaseBreaker()
-	consumer := NewConsumer(breaker, repo)
+	worker := NewWorker(breaker, repo)
 
-	worker(ctx, conn, queue, consumer)
+	if err := consumer(ctx, queue, worker); err != nil {
+		log.Fatalf("Worker failed: %v", err)
+	}
 }
 
-func worker(ctx context.Context, conn *pgx.Conn, queue *Queue, consumer *Consumer) error {
+func consumer(ctx context.Context, queue *Queue, worker *Worker) error {
 	queueUrl := os.Getenv("SQS_QUEUE_URL")
+	retryCount := 0
 
 	for {
 		messages, err := queue.GetMessage(ctx, queueUrl)
 		if err != nil {
-			return fmt.Errorf("Error receiving messages: %v", err)
+			return fmt.Errorf("Error receiving messages: %w", err)
 		}
 
+		if len(messages) == 0 {
+			continue
+		}
+
+		shouldBackoff := false
 		for _, msg := range messages {
 			if msg.Body == nil {
 				log.Println("Message body is empty")
@@ -64,27 +73,54 @@ func worker(ctx context.Context, conn *pgx.Conn, queue *Queue, consumer *Consume
 			}
 
 			var order Order
-			err := json.Unmarshal([]byte(*msg.Body), &order)
-			if err != nil {
-				log.Fatalf("Failed to unmarshal SQS message body: %v", err)
+			if err := json.Unmarshal([]byte(*msg.Body), &order); err != nil {
+				return fmt.Errorf("Failed to unmarshal SQS message body: %w", err)
 			}
 
-			err = consumer.Process(ctx, order)
-			switch {
-			case err == nil:
-				queue.DeleteMessage(ctx, queueUrl, *msg.ReceiptHandle)
-			case errors.Is(err, gobreaker.ErrOpenState):
-				log.Println("Circuit Breaker aberto")
-			case errors.Is(err, gobreaker.ErrTooManyRequests):
-				log.Println("Half-Open limit")
-			default:
-				log.Printf("erro ao salvar: %v", err)
+			err = worker.Process(ctx, order)
+			if err == nil {
+				if err := queue.DeleteMessage(ctx, queueUrl, *msg.ReceiptHandle); err != nil {
+					log.Printf("Failed to delete message from queue: %v", err)
+				}
+				retryCount = 0
+				continue
 			}
+
+			if errors.Is(err, gobreaker.ErrOpenState) || errors.Is(err, gobreaker.ErrTooManyRequests) {
+				log.Println("Circuit Breaker aberto")
+				shouldBackoff = true
+				break
+			}
+
+			log.Printf("erro ao salvar: %v", err)
+			break
+		}
+
+		if shouldBackoff {
+			retryCount = doBackoff(ctx, retryCount)
 		}
 	}
 }
 
-func dbConnect() (*pgx.Conn, error) {
+func doBackoff(ctx context.Context, retryCount int) int {
+	delay := baseDelay * (1 << retryCount)
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	log.Printf("Retrying in backoff %v...\n", delay)
+
+	select {
+	case <-time.After(delay):
+	case <-ctx.Done():
+	}
+
+	if retryCount < maxRetries {
+		retryCount++
+	}
+	return retryCount
+}
+
+func initDbConnection() (*pgx.Conn, error) {
 	conn, err := pgx.Connect(context.Background(), os.Getenv("DB_URL"))
 	if err != nil {
 		return nil, fmt.Errorf("Unable to connect to database: %v", err)

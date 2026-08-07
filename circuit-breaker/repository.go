@@ -7,6 +7,12 @@ import (
 	pgx "github.com/jackc/pgx/v5"
 )
 
+type Order struct {
+	ID     string
+	Name   string
+	Amount float64
+}
+
 type Repository struct {
 	Conn *pgx.Conn
 }
