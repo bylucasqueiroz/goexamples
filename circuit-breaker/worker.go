@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/sony/gobreaker/v2"
@@ -19,7 +21,12 @@ func NewWorker(breaker *gobreaker.CircuitBreaker[any], repo *Repository) *Worker
 	}
 }
 
-func (c *Worker) Process(ctx context.Context, order Order) error {
+func (c *Worker) Process(ctx context.Context, msg string) error {
+	var order Order
+	if err := json.Unmarshal([]byte(msg), &order); err != nil {
+		return fmt.Errorf("Failed to unmarshal SQS message body: %w", err)
+	}
+
 	_, err := c.breaker.Execute(func() (any, error) {
 		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()

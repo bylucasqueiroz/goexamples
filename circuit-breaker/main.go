@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"os"
 	"time"
 
@@ -20,7 +20,7 @@ import (
 const (
 	maxRetries = 5
 	baseDelay  = 1 * time.Second
-	maxDelay   = 30 * time.Second
+	maxDelay   = 10 * time.Second
 )
 
 func main() {
@@ -72,16 +72,12 @@ func consumer(ctx context.Context, queue *Queue, worker *Worker) error {
 				continue
 			}
 
-			var order Order
-			if err := json.Unmarshal([]byte(*msg.Body), &order); err != nil {
-				return fmt.Errorf("Failed to unmarshal SQS message body: %w", err)
-			}
-
-			err = worker.Process(ctx, order)
+			err = worker.Process(ctx, *msg.Body)
 			if err == nil {
 				if err := queue.DeleteMessage(ctx, queueUrl, *msg.ReceiptHandle); err != nil {
 					log.Printf("Failed to delete message from queue: %v", err)
 				}
+				log.Printf("Successfully processed order: %v", msg.Body)
 				retryCount = 0
 				continue
 			}
@@ -103,7 +99,8 @@ func consumer(ctx context.Context, queue *Queue, worker *Worker) error {
 }
 
 func doBackoff(ctx context.Context, retryCount int) int {
-	delay := baseDelay * (1 << retryCount)
+	backoff := baseDelay * (1 << retryCount)
+	delay := time.Duration(rand.Int64N(int64(backoff)))
 	if delay > maxDelay {
 		delay = maxDelay
 	}
